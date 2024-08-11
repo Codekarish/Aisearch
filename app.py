@@ -1,10 +1,14 @@
 # app.py
 
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, render_template
 from main_last import get_q, optimized_faiss_search, refined_sorting_logic, properties, index, tokenizer, model
 
 app = Flask(__name__)
 
+@app.route('/')
+def index():
+
+    return render_template('aisearch.html')
 @app.route('/search', methods=['POST'])
 def search():
     inp = request.json
@@ -20,5 +24,7 @@ def search():
         return search_result.to_json(orient='records')
     else:
         return jsonify({"error": "No matching results found."})
+if __name__ == '__main__':
+    app.run(debug=True)
 
 
