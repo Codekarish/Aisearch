@@ -1,0 +1,47 @@
+<!-- Aisearch.html -->
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Search Test</title>
+</head>
+<body>
+    <h1>Search Properties</h1>
+    <form id="searchForm">
+        <label for="query">Enter Search Query:</label><br>
+        <input type="text" id="query" name="query"><br><br>
+        <input type="submit" value="Search">
+    </form>
+
+    <div id="results"></div>
+
+    <script>
+        document.getElementById('searchForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+            const query = document.getElementById('query').value;
+
+            fetch('/search', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ query: query }),
+            })
+            .then(response => response.json())
+            .then(data => {
+                let resultDiv = document.getElementById('results');
+                resultDiv.innerHTML = '<h2>Search Results:</h2>';
+                if (data.error) {
+                    resultDiv.innerHTML += '<p>' + data.error + '</p>';
+                } else {
+                    data.forEach(result => {
+                        resultDiv.innerHTML += '<p>' + JSON.stringify(result) + '</p>';
+                    });
+                }
+            });
+        });
+    </script>
+</body>
+</html>
