@@ -28,8 +28,8 @@ from langchain_core.prompts.chat import (
 )
 import json
 
-index = faiss.read_index('real_estate_final_index.faiss')
-properties = pd.read_csv('modified_properties_new.csv')
+index = faiss.read_index('/content/real_estate_final_index.faiss')
+properties = pd.read_csv('/content/modified_properties_new.csv')
 tokenizer = AutoTokenizer.from_pretrained('cross-encoder/ms-marco-TinyBERT-L-2-v2', cache_dir='./cache_L')
 model = AutoModel.from_pretrained('cross-encoder/ms-marco-TinyBERT-L-2-v2', cache_dir='./cache_L')
 
@@ -37,10 +37,10 @@ def get_q(msg):
     llm = ChatOpenAI(temperature=0, model='gpt-4-turbo-2024-04-09',
                        api_key="sk-proj-pHkywA2mDUiHGcCWRM4TT3BlbkFJz3qlbeGgfG8C70iHX7WK")
     memory = ConversationBufferMemory(memory_key="get_bed", return_messages=True)
-    sys_prompt = f"""The user says: "{msg}", Just incase the text is long and not straightforward, Look for the main 
+    sys_prompt = f"""The user says: "{msg}", Just incase the text is long and not straightforward, Look for the main
     information in the user's input and extract it. main information is the number of bedrooms, so, anything the user type
     just take note of the number of bedrooms and return something like 3 bedroom or 2 bedroom, and map it with bedroom
-    
+
     also extract the location and map it with location, also extract if the house is for Rent or for Sale and map it to sub_type,
     if for rent just return Rent or for sale just return Sale
     then return the whole words and map it to query
@@ -51,7 +51,7 @@ def get_q(msg):
     unknown keyword to the sub_type, and if they didn't mention number of bedroom they want, just pass unknown keyword to bedroom
     likewise for location too.
     extract the price and map it to price key, map the price key to unknown if it's not found in the sentence
-        prices can be a number in full like 1000, 10,000, 1,000,000 or a short form such as 1K, 10K, 1M, 1B, etc 
+        prices can be a number in full like 1000, 10,000, 1,000,000 or a short form such as 1K, 10K, 1M, 1B, etc
         Take note of price modifiers such as less than, more than, for etc...
     extract the agent name and map it to agent key, map the agent key to unknown if it's not found in the sentence
     extract the property type and map it to property, map the property key to unknown if it's not found in the sentence,
@@ -102,7 +102,7 @@ def clean_text(raw_html):
     clean_text = clean_text.replace('📌', '').strip()
     clean_text = emoji.replace_emoji(clean_text, replace='')
     return clean_text
-    
+
 
 # Function to embed text
 def embed_text(text, tokenizer, model):
@@ -118,17 +118,17 @@ def calculateInnerProduct(L2_score):
 
 def haversine(lon1, lat1, lon2, lat2):
     """
-    Calculate the great-circle distance between two points 
+    Calculate the great-circle distance between two points
     on the Earth's surface using the Haversine formula.
     """
     lon1, lat1, lon2, lat2 = map(np.radians, [lon1, lat1, lon2, lat2])
-    
+
     dlon = lon2 - lon1
     dlat = lat2 - lat1
-    
+
     a = np.sin(dlat / 2)**2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon / 2)**2
     c = 2 * np.arcsin(np.sqrt(a))
-    
+
     r = 6371  # Radius of Earth in kilometers. Use 3956 for miles. Determines return value units.
     return c * r
 def calculate_dynamic_weight(query, data):
@@ -147,57 +147,58 @@ def calculate_dynamic_weight(query, data):
 def expand_search_radius(query, data, max_radius=50):
     ref_lat = data.iloc[0]['lat']
     ref_lon = data.iloc[0]['lon']
-    
+
     if 'distance' in data.columns:
         within_radius = data[data['distance'] <= max_radius]
-        
+
         if within_radius.empty:
             # Gradually increase the search radius
             for radius in range(50, 201, 50):
                 within_radius = data[data['distance'] <= radius]
                 if not within_radius.empty:
                     break
-    
+
         return within_radius
     else:
         return data
-    
+print(properties.head(5))
+
 def optimized_faiss_search(query, index, tokenizer, model, data, topk=20, nprobe=5):
     # Set nprobe dynamically based on distance
     index.nprobe = nprobe if query['location'] else 1
-    
+
     description_embedding = embed_text(query['query'], tokenizer, model)
-    
+
     # Additional embeddings if required
     # Combine embeddings into a single query vector
     query_embedding = np.hstack([description_embedding])
-    
+
     dim = query_embedding.shape[0]
     query_embedding = query_embedding.reshape(1, dim)
     faiss.normalize_L2(query_embedding)
-    
+
     D, I = index.search(query_embedding, topk)
-    
+
     indices = I[0]
     L2_score = D[0]
     inner_product = [calculateInnerProduct(l2) for l2 in L2_score]
-    
+
     matching_data = data.iloc[indices]
-    
+
     search_result = pd.DataFrame({
         'index': indices,
         'cosine_sim': inner_product,
         'L2_score': L2_score
     })
-    
+
     dat = pd.concat([matching_data.reset_index(drop=True), search_result.reset_index(drop=True)], axis=1)
     return dat
 def refined_sorting_logic(dat, query):
     sort_criteria = [
-        f"is_{query['location'].lower()}", 
-        f"is_{query['agent'].lower()}", 
-        f"is_{query['sub_type'].lower()}", 
-        f"is_{query['bedroom'].lower()}", 
+        f"is_{query['location'].lower()}",
+        f"is_{query['agent'].lower()}",
+        f"is_{query['sub_type'].lower()}",
+        f"is_{query['bedroom'].lower()}",
         f"is_{query['property'].lower()}"
     ]
     sort_ascending = [False, False, False, False, False]
@@ -211,5 +212,5 @@ def refined_sorting_logic(dat, query):
     sort_ascending.extend([True, True, True, True, True, True])
 
     dat = dat.sort_values(by=sort_criteria, ascending=sort_ascending)
-    
+
     return dat
