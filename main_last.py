@@ -28,8 +28,8 @@ from langchain_core.prompts.chat import (
 )
 import json
 
-index = faiss.read_index('/content/real_estate_final_index.faiss')
-properties = pd.read_csv('/content/modified_properties_new.csv')
+index = faiss.read_index('real_estate_final_index.faiss')
+properties = pd.read_csv('modified_properties_new.csv')
 tokenizer = AutoTokenizer.from_pretrained('cross-encoder/ms-marco-TinyBERT-L-2-v2', cache_dir='./cache_L')
 model = AutoModel.from_pretrained('cross-encoder/ms-marco-TinyBERT-L-2-v2', cache_dir='./cache_L')
 
