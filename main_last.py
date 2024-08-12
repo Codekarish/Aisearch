@@ -6,7 +6,7 @@ from warnings import filterwarnings
 from bs4 import BeautifulSoup
 import emoji
 import torch
-from transformers import AutoTokenizer, AutoModel
+from transformers import AutoTokenizer, AutoModelForTokenClassification, pipeline
 import numpy as np
 from geopy.distance import great_circle
 from sklearn.preprocessing import normalize
@@ -15,30 +15,22 @@ import math
 
 filterwarnings('ignore')
 
+# Load FAISS index and properties data
+index = faiss.read_index('/content/real_estate_final_index.faiss')
+properties = pd.read_csv('/content/modified_properties_new.csv')
 
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_groq import ChatGroq
-from langchain_openai import ChatOpenAI
-from langchain.memory import ConversationBufferMemory
-from langchain.chains import LLMChain
-from langchain_core.prompts.chat import (
-    ChatPromptTemplate,
-    HumanMessagePromptTemplate,
-    SystemMessagePromptTemplate,
-    MessagesPlaceholder,
-)
-import json
-
-index = faiss.read_index('real_estate_final_index.faiss')
-properties = pd.read_csv('modified_properties_new.csv')
+# Load tokenizer and model for embeddings
 tokenizer = AutoTokenizer.from_pretrained('cross-encoder/ms-marco-TinyBERT-L-2-v2', cache_dir='./cache_L')
 model = AutoModel.from_pretrained('cross-encoder/ms-marco-TinyBERT-L-2-v2', cache_dir='./cache_L')
 
+# Load a pre-trained model for Named Entity Recognition (NER)
+ner_tokenizer = AutoTokenizer.from_pretrained("dslim/bert-base-NER")
+ner_model = AutoModelForTokenClassification.from_pretrained("dslim/bert-base-NER")
+ner_pipeline = pipeline("ner", model=ner_model, tokenizer=ner_tokenizer)
+
 def get_q(msg):
-    llm = ChatOpenAI(temperature=0, model='gpt-4-turbo-2024-04-09',
-                       api_key="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")
-    memory = ConversationBufferMemory(memory_key="get_bed", return_messages=True)
-    sys_prompt = f"""The user says: "{msg}", Just incase the text is long and not straightforward, Look for the main
+    """
+   Just incase the text is long and not straightforward, Look for the main
     information in the user's input and extract it. main information is the number of bedrooms, so, anything the user type
     just take note of the number of bedrooms and return something like 3 bedroom or 2 bedroom, and map it with bedroom
 
@@ -87,16 +79,44 @@ def get_q(msg):
     if user mentions owned or own compound , map own_compound to Yes, and No otherwise, and if they specify none, just map to unknown.
     if user searches something similar to landlord, then map submitted_by to owner, otherwise agent if they specify agent, and if they specify none, just map to unknown
     """
-    prompt = ChatPromptTemplate.from_messages([SystemMessagePromptTemplate.from_template(sys_prompt),
-                                               MessagesPlaceholder(variable_name="get_bed"),
-                                               HumanMessagePromptTemplate.from_template(f"{msg}")])
-    conversation = LLMChain(llm=llm, prompt=prompt, memory=memory)
+    # NER pipeline
+    entities = ner_pipeline(msg)
 
-    memory.chat_memory.add_user_message(msg)
-    response = conversation.invoke({"text": msg})
-    return json.loads(response['text'])
+    # Initialize the query dictionary
+    query = {
+        "bedroom": "unknown",
+        "location": "unknown",
+        "sub_type": "unknown",
+        "price": "unknown",
+        "agent": "unknown",
+        "property": "unknown",
+        "gated_community": "unknown",
+        "own_compound": "unknown",
+        "submitted_by": "unknown",
+        "query": msg
+    }
 
+    for entity in entities:
+        entity_text = entity['word'].lower()
+        entity_label = entity['entity'].upper()
 
+        if entity_label == "LOCATION":
+            query["location"] = entity_text
+        elif entity_label == "MISC":
+            if entity_text in ["rent", "sale"]:
+                query["sub_type"] = entity_text.capitalize()
+            elif entity_text.endswith('bedroom'):
+                query["bedroom"] = entity_text
+            elif entity_text in ['own', 'owned']:
+                query["own_compound"] = "Yes"
+            elif entity_text in ['gated', 'community']:
+                query["gated_community"] = "Yes"
+        elif entity_label == "ORG":
+            query["agent"] = entity_text
+        elif entity_label == "MONEY":
+            query["price"] = entity_text.replace('k', '000').replace('m', '000000').replace('b', '000000000')
+
+    return query
 
 # Function to clean HTML tags from string
 def clean_text(raw_html):
@@ -114,7 +134,6 @@ def embed_text(text, tokenizer, model):
 
 def combine_embeddings(*embeddings):
     return np.hstack(embeddings)
-
 
 def calculate_inner_product(L2_score):
     return (2 - math.pow(L2_score, 2)) / 2
@@ -187,6 +206,7 @@ def expand_search_radius(query, data, max_radius=50):
         return within_radius
     else:
         return data
+
 print(properties.head(5))
 
 def optimized_faiss_search(query, index, tokenizer, model, data, topk=20, nprobe=5):
@@ -222,36 +242,6 @@ def optimized_faiss_search(query, index, tokenizer, model, data, topk=20, nprobe
     
     return dat
 
-
-def calculate_attribute_scores(query, data):
-    data['score'] = 0.0
-
-    # Location matching score
-    if query.get('location'):
-        data['score'] += WEIGHTS['location'] * data['is_location_match'].astype(float)
-
-    # Price matching score
-    if query.get('price'):
-        data['score'] += WEIGHTS['price'] * data['is_price_match'].astype(float)
-        
-    # Property type matching score
-    if query.get('property'):
-        data['score'] += WEIGHTS['property_type'] * data['is_property_type_match'].astype(float)
-        
-    # Sub-type matching score
-    if query.get('sub_type'):
-        data['score'] += WEIGHTS['sub_type'] * data['is_sub_type_match'].astype(float)
-        
-    # Bedroom matching score
-    if query.get('bedroom'):
-        data['score'] += WEIGHTS['bedroom'] * data['is_bedroom_match'].astype(float)
-        
-    # Agent matching score
-    if query.get('agent'):
-        data['score'] += WEIGHTS['agent'] * data['is_agent_match'].astype(float)
-    
-    return data
-
 def refined_sorting_logic(dat, query):
     dat = calculate_attribute_scores(query, dat)
 
@@ -259,4 +249,3 @@ def refined_sorting_logic(dat, query):
     dat = dat.sort_values(by='score', ascending=False)
 
     return dat
-
