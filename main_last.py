@@ -6,7 +6,7 @@ from warnings import filterwarnings
 from bs4 import BeautifulSoup
 import emoji
 import torch
-from transformers import AutoTokenizer, AutoModelForTokenClassification, pipeline
+from transformers import AutoTokenizer, AutoModelForTokenClassification, pipeline, AutoModel
 import numpy as np
 from geopy.distance import great_circle
 from sklearn.preprocessing import normalize
