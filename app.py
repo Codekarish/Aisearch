@@ -1,30 +1,32 @@
-# app.py
-
 from flask import Flask, request, jsonify, render_template
 from main_last import get_q, optimized_faiss_search, refined_sorting_logic, properties, index, tokenizer, model
 
 app = Flask(__name__)
 
 @app.route('/')
-def index():
+def home():
+    return render_template('aisearch.html', properties=None)
 
-    return render_template('aisearch.html')
 @app.route('/search', methods=['POST'])
 def search():
-    inp = request.json
-    query = get_q(inp.get("query"))
-    print(query)
-    topk = inp.get('k', 20)  # Get 'k' from the request, default to 20 if not provided
+    query = request.form.get("query", "")
+    print(f"User Query: {query}")
 
-    search_result = optimized_faiss_search(query, index, tokenizer, model, properties, topk=topk, nprobe=5)
+    # Process the query using get_q function
+    processed_query = get_q(query)
+    print(f"Processed Query: {processed_query}")
+
+    # Perform the search
+    topk = int(request.form.get('k', 20))
+    search_result = optimized_faiss_search(processed_query, index, tokenizer, model, properties, topk=topk, nprobe=5)
+
     # Drop unnecessary columns
-    search_result = search_result.drop(['description_embedding', 'location_embedding', 'bedroom_embedding', 'submission_type_embedding', 'property_type_embedding', 'price_embedding', 'agent_embedding'], axis=1)
+    search_result = search_result.drop(['description_embedding', 'location_embedding', 'bedroom_embedding', 'submission_type_embedding', 'property_type_embedding', 'price_embedding', 'agent_embedding'], axis=1, errors='ignore')
 
     if not search_result.empty:
-        return search_result.to_json(orient='records')
+        return render_template('aisearch.html', properties=search_result)
     else:
-        return jsonify({"error": "No matching results found."})
+        return render_template('aisearch.html', properties=None, error="No matching results found.")
+
 if __name__ == '__main__':
     app.run(debug=True)
-
-

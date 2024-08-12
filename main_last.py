@@ -8,12 +8,13 @@ import emoji
 import torch
 from transformers import AutoTokenizer, AutoModel
 import numpy as np
+from geopy.distance import great_circle
 from sklearn.preprocessing import normalize
 import faiss
+import math
 
 filterwarnings('ignore')
 
-app = Flask(__name__)
 
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_groq import ChatGroq
@@ -96,13 +97,13 @@ def get_q(msg):
     return json.loads(response['text'])
 
 
+
 # Function to clean HTML tags from string
 def clean_text(raw_html):
     clean_text = BeautifulSoup(raw_html, "html.parser").get_text()
     clean_text = clean_text.replace('📌', '').strip()
     clean_text = emoji.replace_emoji(clean_text, replace='')
     return clean_text
-
 
 # Function to embed text
 def embed_text(text, tokenizer, model):
@@ -111,44 +112,69 @@ def embed_text(text, tokenizer, model):
         outputs = model(**inputs)
     return outputs.last_hidden_state.mean(dim=1).squeeze().numpy()
 
+def combine_embeddings(*embeddings):
+    return np.hstack(embeddings)
 
-def calculateInnerProduct(L2_score):
-    import math
+
+def calculate_inner_product(L2_score):
     return (2 - math.pow(L2_score, 2)) / 2
 
-def haversine(lon1, lat1, lon2, lat2):
+def haversine_geopy(lat1, lon1, lat2, lon2):
     """
     Calculate the great-circle distance between two points
-    on the Earth's surface using the Haversine formula.
+    on the Earth's surface using the Geopy library.
     """
-    lon1, lat1, lon2, lat2 = map(np.radians, [lon1, lat1, lon2, lat2])
+    coords_1 = (lat1, lon1)
+    coords_2 = (lat2, lon2)
+    return great_circle(coords_1, coords_2).kilometers
 
-    dlon = lon2 - lon1
-    dlat = lat2 - lat1
+# Define weights for each critical attribute
+WEIGHTS = {
+    'location': 5,
+    'price': 3,
+    'property_type': 2,
+    'sub_type': 2,
+    'bedroom': 1,
+    'agent': 1
+}
 
-    a = np.sin(dlat / 2)**2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon / 2)**2
-    c = 2 * np.arcsin(np.sqrt(a))
+def calculate_attribute_scores(query, data):
+    data['score'] = 0.0
+    
+    # Location matching score
+    if query.get('location'):
+        data['score'] += WEIGHTS['location'] * data['is_location_match'].astype(float)
 
-    r = 6371  # Radius of Earth in kilometers. Use 3956 for miles. Determines return value units.
-    return c * r
-def calculate_dynamic_weight(query, data):
-    location_weight = 1.0  # Default weight
-
-    if query['location']:
-        location_weight = 2.0  # Increase weight if location is specified
-
-    # Adjust weights based on proximity
-    if 'distance' in data.columns:
-        data['location_weight'] = np.exp(-0.1 * data['distance']) * location_weight
-    else:
-        data['location_weight'] = location_weight
-
+    # Price matching score
+    if query.get('price'):
+        data['score'] += WEIGHTS['price'] * data['is_price_match'].astype(float)
+        
+    # Property type matching score
+    if query.get('property'):
+        data['score'] += WEIGHTS['property_type'] * data['is_property_type_match'].astype(float)
+        
+    # Sub-type matching score
+    if query.get('sub_type'):
+        data['score'] += WEIGHTS['sub_type'] * data['is_sub_type_match'].astype(float)
+        
+    # Bedroom matching score
+    if query.get('bedroom'):
+        data['score'] += WEIGHTS['bedroom'] * data['is_bedroom_match'].astype(float)
+        
+    # Agent matching score
+    if query.get('agent'):
+        data['score'] += WEIGHTS['agent'] * data['is_agent_match'].astype(float)
+    
     return data
+
 def expand_search_radius(query, data, max_radius=50):
     ref_lat = data.iloc[0]['lat']
     ref_lon = data.iloc[0]['lon']
 
     if 'distance' in data.columns:
+        # Calculate distances using geopy
+        data['distance'] = data.apply(lambda row: haversine_geopy(ref_lat, ref_lon, row['lat'], row['lon']), axis=1)
+
         within_radius = data[data['distance'] <= max_radius]
 
         if within_radius.empty:
@@ -164,24 +190,22 @@ def expand_search_radius(query, data, max_radius=50):
 print(properties.head(5))
 
 def optimized_faiss_search(query, index, tokenizer, model, data, topk=20, nprobe=5):
-    # Set nprobe dynamically based on distance
-    index.nprobe = nprobe if query['location'] else 1
+    index.nprobe = nprobe if query.get('location') else 1
 
-    description_embedding = embed_text(query['query'], tokenizer, model)
+    description_embedding = embed_text(query.get('description', ''), tokenizer, model)
+    location_embedding = embed_text(query.get('location', ''), tokenizer, model)  # If location embeddings are used
 
-    # Additional embeddings if required
     # Combine embeddings into a single query vector
-    query_embedding = np.hstack([description_embedding])
+    query_embedding = combine_embeddings(description_embedding, location_embedding)
 
-    dim = query_embedding.shape[0]
-    query_embedding = query_embedding.reshape(1, dim)
+    query_embedding = query_embedding.reshape(1, -1)
     faiss.normalize_L2(query_embedding)
 
     D, I = index.search(query_embedding, topk)
 
     indices = I[0]
     L2_score = D[0]
-    inner_product = [calculateInnerProduct(l2) for l2 in L2_score]
+    inner_product = [calculate_inner_product(l2) for l2 in L2_score]
 
     matching_data = data.iloc[indices]
 
@@ -192,25 +216,47 @@ def optimized_faiss_search(query, index, tokenizer, model, data, topk=20, nprobe
     })
 
     dat = pd.concat([matching_data.reset_index(drop=True), search_result.reset_index(drop=True)], axis=1)
+    
+    # Apply refined sorting logic
+    dat = refined_sorting_logic(dat, query)
+    
     return dat
+
+
+def calculate_attribute_scores(query, data):
+    data['score'] = 0.0
+
+    # Location matching score
+    if query.get('location'):
+        data['score'] += WEIGHTS['location'] * data['is_location_match'].astype(float)
+
+    # Price matching score
+    if query.get('price'):
+        data['score'] += WEIGHTS['price'] * data['is_price_match'].astype(float)
+        
+    # Property type matching score
+    if query.get('property'):
+        data['score'] += WEIGHTS['property_type'] * data['is_property_type_match'].astype(float)
+        
+    # Sub-type matching score
+    if query.get('sub_type'):
+        data['score'] += WEIGHTS['sub_type'] * data['is_sub_type_match'].astype(float)
+        
+    # Bedroom matching score
+    if query.get('bedroom'):
+        data['score'] += WEIGHTS['bedroom'] * data['is_bedroom_match'].astype(float)
+        
+    # Agent matching score
+    if query.get('agent'):
+        data['score'] += WEIGHTS['agent'] * data['is_agent_match'].astype(float)
+    
+    return data
+
 def refined_sorting_logic(dat, query):
-    sort_criteria = [
-        f"is_{query['location'].lower()}",
-        f"is_{query['agent'].lower()}",
-        f"is_{query['sub_type'].lower()}",
-        f"is_{query['bedroom'].lower()}",
-        f"is_{query['property'].lower()}"
-    ]
-    sort_ascending = [False, False, False, False, False]
+    dat = calculate_attribute_scores(query, dat)
 
-    # Apply dynamic weighting to sort by location proximity
-    if 'location_weight' in dat.columns:
-        sort_criteria.insert(0, 'location_weight')
-        sort_ascending.insert(0, False)
-
-    sort_criteria.extend(['agent.name', 'location', 'submission_type', 'property_type', 'bedrooms_numeric', 'distance'])
-    sort_ascending.extend([True, True, True, True, True, True])
-
-    dat = dat.sort_values(by=sort_criteria, ascending=sort_ascending)
+    # Sort by total score in descending order
+    dat = dat.sort_values(by='score', ascending=False)
 
     return dat
+
