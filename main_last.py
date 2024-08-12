@@ -7,7 +7,7 @@ from bs4 import BeautifulSoup
 import emoji
 import torch
 import os
-import dotenv
+from dotenv import load_dotenv
 from transformers import AutoTokenizer, AutoModel
 import numpy as np
 from geopy.distance import great_circle
