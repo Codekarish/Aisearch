@@ -16,8 +16,8 @@ import math
 filterwarnings('ignore')
 
 # Load FAISS index and properties data
-index = faiss.read_index('/content/real_estate_final_index.faiss')
-properties = pd.read_csv('/content/modified_properties_new.csv')
+index = faiss.read_index('real_estate_final_index.faiss')
+properties = pd.read_csv('modified_properties_new.csv')
 
 # Load tokenizer and model for embeddings
 tokenizer = AutoTokenizer.from_pretrained('cross-encoder/ms-marco-TinyBERT-L-2-v2', cache_dir='./cache_L')
